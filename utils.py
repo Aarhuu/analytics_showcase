@@ -10,9 +10,6 @@ def get_tickers():
     return pd.read_html(
     'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]
 
-
-
-
 class Portfolio():
     def __init__(self, tickers, start_date, end_date) -> None:
         self.tickers: list[str] = tickers
@@ -81,4 +78,11 @@ class Portfolio():
         self.optim_vola = np.sqrt(np.dot(min_w, np.dot(min_w, self.covariance)))
 
     
+
+class EnergySystem():
+    def __init__(self, panel_area, daily_avg_energy_use, storage_capacity) -> None:
+        self.panel_area: float = panel_area
+        self.avg_enrg_use: float = daily_avg_energy_use
+        self.storage: float = storage_capacity
+
     
