@@ -4,8 +4,6 @@ import dash
 from dash import html, dcc, callback
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
-import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 from dash.dependencies import Input, Output, State
 
@@ -79,7 +77,7 @@ def plot_data(n_clicks, selected_stocks, start_date, end_date):
                                   marker=dict(size=15, line=dict(width=2))
                                   )
                                   )
-    fig1.update_layout(xaxis_title="Historical volatility", yaxis_title="Average of daily returns annualized %")
+    fig1.update_layout(xaxis_title="Volatility of selected time span", yaxis_title="Average of daily returns of selected time span %")
 
     fig2 = go.Figure()
     for sym in symbols:
@@ -111,6 +109,6 @@ def optimise_portfolio(n_clicks, selected_stocks, start_date, end_date):
     if port.results.success:
         fig = go.Figure([go.Bar(x=port.close_data.columns.values, y=port.results.x)])
         fig.update_layout(xaxis_title="Stock symbol", yaxis_title="Weight")
-        return [f"Optimal allocation found. Extrapolated annual return for the portfolio is {np.round(port.optim_returns, decimals=3)}% with volatility {np.round(port.optim_vola, decimals=3)}", dcc.Graph(figure=fig)]
+        return [f"Optimal allocation found. Extrapolated annual return for the portfolio is {np.round(port.optim_returns, decimals=3)}% with volatility of {np.round(port.optim_vola, decimals=3)}", dcc.Graph(figure=fig)]
     else:
         return "Optimal allocation not found. Select other stocks and/or timeframe"
