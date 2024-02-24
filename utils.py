@@ -115,17 +115,17 @@ class EnergySystem():
                  panel_area, 
                  daily_avg_energy_use, 
                  storage_capacity,
-                 max_storage_duration,
-                 full_cap_discharge) -> None:
+                 max_storage_duration = 2,
+                 full_cap_discharge = 0.1) -> None:
         self.panel_area: float = panel_area
-        self.avg_energ_use: float = daily_avg_energy_use
+        self.avg_energy_use: float = daily_avg_energy_use
         self.storage_capacity: float = storage_capacity
         self.max_storage_duration: float = max_storage_duration
         self.full_cap_discharge: float = full_cap_discharge
         self.spot_data: pd.DataFrame = pd.DataFrame()
-        self.h_band: float = None
-        self.l_band: float = None
-        self.panel_efficiency: float = 0.22
+        self.optim_h_band: float = None
+        self.optim_l_band: float = None
+        self.panel_efficiency: float = 0.8
         self.solar_to_electricity: float = 0.27777
         self.simulated_savings: list = None
         self.simulated_storage: list = None
@@ -133,54 +133,72 @@ class EnergySystem():
     def get_spot_data(self, filepath):
         self.spot_data = pd.read_csv(filepath)
         self.spot_data["Aika"] = pd.to_datetime(self.spot_data["Aika"], format="%Y-%m-%d %H:%M")
-    def set_bands(self, h_band, l_band):
-        self.h_band, self.l_band = h_band, l_band
+    
+    def simulate_system(self, step_size):
 
-    def simulate_system(self):
-        savings = [0.0]
-        storage = [0.0]
-        for h in range(1, self.spot_data.shape[0]):
-            month = self.spot_data.iloc[h, 0].month
-            hour_of_day = self.spot_data.iloc[h, 0].hour
-            price = self.spot_data.iloc[h, 1]
-            if price < self.l_band and storage[h-1] < self.storage_capacity:
-                available_solar = daily_avg_solar[str(month)]*self.panel_area*self.panel_efficiency*self.solar_to_electricity
-                if available_solar*self.panel_efficiency < self.storage_capacity - storage[h-1]:
-                    stored = available_solar*self.panel_efficiency
-                    storage.append(storage[h-1] + stored)
-                    savings.append(savings[h-1] + (available_solar*price/100))
-                else:
-                    storage.append(self.storage_capacity)
-                    savings.append(savings[h-1] + (storage[h] - storage[h-1])*price/100)
+        l_band = self.spot_data["c/kWh"].min()
+        h_band = self.spot_data["c/kWh"].max()
 
-            elif price > self.h_band and storage[h-1] != 0.0 and str(month):
-                available_energy = storage[h-1]
-                used_storage_energy = np.min([self.avg_energ_use, available_energy])
-                storage.append(storage[h-1] - used_storage_energy)
-                savings.append(savings[h-1] - price*used_storage_energy/100)
-            elif storage[h-1] == self.storage_capacity:
-                storage.append(storage[h-1]*(1 - self.full_cap_discharge))
-                savings.append(savings[h-1] - price*storage[h-1]*(1 - self.full_cap_discharge)/100)    
+        best_result = 0.0
 
-            else:
-                storage.append(storage[h-1])
-                savings.append(savings[h-1])
-                        
-        self.simulated_storage = storage
-        self.simulated_savings = savings
+        while h_band >= self.spot_data["c/kWh"].min():
+            while l_band <= h_band:
+                savings = [0.0]
+                storage = [0.0]
+                for h in range(1, self.spot_data.shape[0]):
+                    month = self.spot_data.iloc[h, 0].month
+                    hour_of_day = self.spot_data.iloc[h, 0].hour
+                    price = self.spot_data.iloc[h, 1]
+                    sunligh_hours = range(10, 17)
 
+                    if (self.spot_data.iloc[-1, 0] - self.spot_data.iloc[h, 0]).days < 1:
+                        day_ahead_data = self.spot_data.iloc[h:,:]
+                    else:
+                        day_ahead_data = self.spot_data.iloc[h:h+24,:]
+                    peak_hours = day_ahead_data[day_ahead_data["c/kWh"]  > h_band]
+                    if price < l_band and storage[h-1] < self.storage_capacity and hour_of_day in sunligh_hours:
+                        available_solar = daily_avg_solar[str(month)]/len(sunligh_hours)*self.panel_area*self.panel_efficiency*self.solar_to_electricity
+                        if available_solar < self.storage_capacity - storage[h-1]:
+                            stored = available_solar
+                            storage.append(storage[h-1] + stored)
+                            savings.append(savings[h-1] + (available_solar*price/100))
+                        else:
+                            storage.append(self.storage_capacity)
+                            savings.append(savings[h-1] + (storage[h] - storage[h-1])*price/100)
 
+                    elif price > h_band and peak_hours.shape[0] == 0 and storage[h-1] > 0.0:
+                        available_energy = storage[h-1]
+                        used_storage_energy = available_energy
+                        storage.append(storage[h-1] - used_storage_energy)
+                        savings.append(savings[h-1] - price*used_storage_energy/100)
+
+                    elif storage[h-1] == self.storage_capacity and peak_hours.shape[0] == 0 == 0:
+                        used_storage_energy = storage[h-1]*self.full_cap_discharge
+                        storage.append(storage[h-1] - used_storage_energy)
+                        savings.append(savings[h-1] - price*storage[h-1]*used_storage_energy/100)    
+
+                    else:
+                        storage.append(storage[h-1]*0.99)
+                        savings.append(savings[h-1])
+                #print(np.round(l_band, 2), np.round(h_band, 2), np.round(np.sum(savings), 2))
+                if np.abs(np.sum(savings)) > best_result: 
+                    best_result = np.abs(np.sum(savings))
+                    self.simulated_storage = storage
+                    self.simulated_savings = savings
+                    self.optim_h_band = h_band
+                    self.optim_l_band = l_band
+                l_band += step_size
+            l_band = self.spot_data["c/kWh"].min()
+            h_band -= step_size
 
 if __name__ == "__main__":
     energy_system = EnergySystem(
-        panel_area=15, 
+        panel_area=50, 
         daily_avg_energy_use=30, 
-        storage_capacity=60, 
-        max_storage_duration=2,
-        full_cap_discharge=0.1)
+        storage_capacity=20)
     energy_system.get_spot_data("./Oomi Spot-hintatieto.csv")
-    energy_system.set_bands(energy_system.spot_data["c/kWh"].mean()*1.5, energy_system.spot_data["c/kWh"].mean()*0.5)
-    energy_system.simulate_system()
+    energy_system.simulate_system(step_size=2.5)
+    print(np.abs(np.sum(energy_system.simulated_savings))/100)
     
         
 
