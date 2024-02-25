@@ -177,10 +177,10 @@ if __name__ == "__main__":
     y_preds_test = simple_rnn.predict(X_test)
 
     y_train_rescaled, y_test_rescaled = service.rescale(y_train), service.rescale(y_test)
-    y_train_preds_rescaled, y_test_rescaled = service.rescale(y_preds_train), service.rescale(y_preds_test)
+    y_train_preds_rescaled, y_test_preds_rescaled = service.rescale(y_preds_train), service.rescale(y_preds_test)
 
     
     y_trues_total = np.concatenate((y_train_rescaled, y_test_rescaled), axis=0)
-    y_preds_total = np.concatenate((y_train_preds_rescaled, y_test_rescaled), axis=0)
+    y_preds_total = np.concatenate((y_train_preds_rescaled, y_test_preds_rescaled), axis=0)
     fig = service.get_plot_true_preds(y_preds_total, y_trues_total)
     fig.savefig("plots/simple_rnn.png")
