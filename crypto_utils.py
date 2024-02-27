@@ -125,7 +125,30 @@ class DataService():
         
         return volume_df
     
-    
+    def get_tick_bars(self, data, m):
+
+        def get_tick_indxs(col):
+            t = data[col]
+            ts = 0
+            idx = []
+            for i, x in enumerate(t):
+                ts += 1
+                if ts > m:
+                    idx.append(i)
+                    ts = 0 
+                    continue
+            return idx
+
+        tick_df = pd.DataFrame()
+        pairs = [col for col in data.columns if "Close" in col]
+        for column in pairs:
+            indx = get_tick_indxs(column)
+            colname = column.replace("Close", "Ticks")
+            tick_df[colname] = data.iloc[indx][column].drop_duplicates()
+        
+        return tick_df
+
+
 
     def create_master_candle_df(self, ohlcv_dict):
         columns = list(ohlcv_dict[list(ohlcv_dict.keys())[0]].columns)
