@@ -1,22 +1,46 @@
-import re
-
 import pandas as pd
 import requests
 import matplotlib.pyplot as plt
-import mplfinance as mpf
 import seaborn as sns
+from scipy import stats
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.metrics import mean_squared_error, accuracy_score
+from sklearn.ensemble import RandomForestClassifier
 import numpy as np
 
-from keras.models import Sequential
-#from keras.layers import LSTM
-from keras.layers import Dense
-from keras.layers import SimpleRNN
-from keras.layers import Dropout
+# from keras.models import Sequential
+# #from keras.layers import LSTM
+# from keras.layers import Dense
+# from keras.layers import SimpleRNN
+# from keras.layers import Dropout
 
+class Visualizer():
+    def __init__(self) -> None:
+        pass
 
+    def get_line_plot(self, data, title = "example plot"):
+        columns = data.columns
+        fig, ax = plt.subplots()
+        for col in columns:
+            ax.plot(data[col], label=col)
+        ax.set_title(f"Series data from {data.index.values[0]} - {data.index.values[-1]}")
+        plt.legend(loc="best")
+        ax.tick_params(axis="x", rotation=45)
+        ax.set_ylabel(title)
+        return ax
+    
+    def get_box_plot(self, data):
+        fig, ax = plt.subplots()
+        sns.boxplot(data=data, ax=ax)
+        ax.set_title(f"Box plot")
+        plt.legend(loc="best")
+        ax.tick_params(axis="x", rotation=90)
+        ax.set_ylabel("Pair price")
+        return ax
+
+    def get_vol_bar_counts(self, vol_bar_df, freq="15min"):
+        return vol_bar_df.groupby(pd.Grouper(freq=freq)).first().iloc[:,0:].fillna(0).plot()
 
 class DataService():
     def __init__(self, api_url):
@@ -24,7 +48,7 @@ class DataService():
         self.scaler = None
 
     def get_chain_data(self):
-        chains = requests.get(api_url + "chains")
+        chains = requests.get(self.api_url + "chains")
         chain_names = [chain["chain_name"] for chain in chains.json()]
         chain_slugs = [chain["chain_slug"] for chain in chains.json()]
         chain_id = [chain["chain_id"] for chain in chains.json()]
@@ -77,6 +101,32 @@ class DataService():
             candle_dict[key] = df
         return candle_dict
     
+    
+    def get_volume_bars(self, data, m):
+
+        def get_volume_indxs(col):
+            t = data[col]
+            ts = 0
+            idx = []
+            for i, x in enumerate(t):
+                ts += x
+                if ts >= m:
+                    idx.append(i)
+                    ts = 0
+                    continue
+            return idx
+        
+        volume_df = pd.DataFrame()
+        volume_columns = [col for col in data.columns if "Volume" in col]
+        for column in volume_columns:
+            indx = get_volume_indxs(column)
+            colname = column.replace("Volume", "Close")
+            volume_df[colname] = data.iloc[indx][column].drop_duplicates()
+        
+        return volume_df
+    
+    
+
     def create_master_candle_df(self, ohlcv_dict):
         columns = list(ohlcv_dict[list(ohlcv_dict.keys())[0]].columns)
         master_df = pd.DataFrame(data={}, index=ohlcv_dict[list(ohlcv_dict.keys())[0]].index.values)
@@ -86,27 +136,55 @@ class DataService():
         
         if master_df.isnull().any().any():
             print("Candle data includes NaN values! Filling NaNs with either ffill or bfill")
-            master_df = master_df.fillna(method="ffill").fillna("bfill")
+            master_df = master_df.ffill().bfill()
         return master_df
+    
+    def get_close_prices(self, dataset):
+        close_columns = [col for col in dataset.columns if "Close" in col]
+        return dataset[close_columns]
+    
+    def get_log_returns(self, data):
+        log_returns = pd.DataFrame()
+        for col in data.columns:
+            log_returns[col] = np.log(data[col]/data[col].shift(1))
+        return log_returns
     
     def scale_data(self, data, scaler=MinMaxScaler(feature_range=(0,1))):
         self.scaler = scaler
-        return scaler.fit_transform(data)
+        scaled = self.scaler.fit_transform(data)
+        scaled = pd.DataFrame(data=scaled,
+                              index=data.index,
+                              columns = data.columns)
+        return scaled
+    
+    def remove_outliers(self, data, threshold=3):
+        return data[(np.abs(stats.zscore(data)) < threshold).all(axis=1)]
+    
+    def get_serial_correlation(self, data):
+        corrs = pd.DataFrame(data={"autocorr": [0]*len(data.columns), "number_of_samples": [0]*len(data.columns)} ,index=data.columns)
+        
+        for col in data.columns:
+           corrs.loc[col, "autocorr"] = pd.Series.autocorr(data[col])
+           corrs.loc[col, "number_of_samples"] = data[col].shape[0]
+        
+        return corrs
     
     def get_X_Y(self, dataset, target_columns):
-        #X  = dataset.drop(columns = target_columns)
-        #Y = dataset[target_columns]
-        X = np.delete(dataset, range(-len(target_columns), 0), 1)
-        Y = dataset[:, range(-len(target_columns), 0)]
+        data_array = dataset.to_numpy()
+        X = np.delete(data_array, range(-len(target_columns), 0), 1)
+        Y = data_array[:, range(-len(target_columns), 0)]
         return X, Y
 
-    def add_lookback_columns(self, dataset, target_columns, look_back=1):
-        Y = dataset[target_columns].shift(look_back)
-        colnames = {col: col + f"_shifted{look_back}" for col in target_columns}
-        Y = Y.rename(columns=colnames)
-        return pd.concat([dataset, Y], axis=1).fillna(method="backfill")
+    def add_lookback_columns(self, dataset, look_back=1):
+        shifted = dataset.shift(look_back)
+        colnames = {col: col + f"_shifted_{look_back}" for col in shifted.columns}
+        shifted = shifted.rename(columns=colnames).bfill()
+        return shifted
+
+    def add_signal_column(self, dataset):
+        return [1 if x > 0 else 0 for x in dataset.diff().bfill()]
         
-    def create_simple_rnn(self, dense_units, hidden_units, input_shape, activations):
+    def create_simple_rnn_regressor(self, dense_units, hidden_units, input_shape, activations):
         # initializing the RNN
         regressor = Sequential()
         
@@ -135,52 +213,43 @@ class DataService():
                         loss = "mean_squared_error")
         
         return regressor
-
-    def rescale(self, data):
-        return self.scaler.inverse_transform(data)
-
-    def get_plot_true_preds(self, preds, trues):
-        fig = plt.figure(figsize=(20,10))
-        plt.plot(trues, linestyle="dotted")
-        plt.plot(preds)
-        return fig
+    
 
 if __name__ == "__main__":
     api_url = "https://tradingstrategy.ai/api/"
-    service = DataService(api_url=api_url)
-    chain_data = service.get_chain_data()
+    data_service = DataService(api_url=api_url)
+    chain_data = data_service.get_chain_data()
     selected_chain = chain_data.iloc[0]["slug"]
-    exchange_data = service.get_exchange_data(selected_chain=selected_chain)
-    pairs_data = service.get_pairs_data(
-        exc_slugs=exchange_data.iloc[0:3]["name"],
+    exchange_data = data_service.get_exchange_data(selected_chain=selected_chain)
+
+    n_exchange = 3
+    n_pairs = 3
+    time_bucket = "1m"
+
+    pairs_data = data_service.get_pairs_data(
+        exc_slugs=exchange_data.iloc[0:n_exchange]["name"],
         chain_slugs=[selected_chain],
-        n_pairs=3)
+        n_pairs=n_pairs)
     start_time = "2024-01-01"
-    end_time = "2024-01-15"
-    candle_dict = service.get_ohlcv_candles(list(pairs_data.index.values), start_time, end_time, time_bucket="15m")
-    master_df = service.create_master_candle_df(candle_dict)
-    target_columns = ["1_Close"]
-    master_df_shifted = service.add_lookback_columns(master_df, target_columns=target_columns, look_back=5)
-    scaled = service.scale_data(master_df_shifted)
-    X, y = service.get_X_Y(scaled, target_columns=target_columns)
-    X_scaled, y_scaled = service.scale_data(X), service.scale_data(y)
-    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y_scaled, test_size=0.2, shuffle=False)
-    X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1],1))
-    X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1],1))
-    y_train = np.reshape(y_train, (y_train.shape[0],1))
-    y_test = np.reshape(y_test, (y_test.shape[0],1))
+    end_time = "2024-01-02"
+    candle_dict = data_service.get_ohlcv_candles(list(pairs_data.index.values), start_time, end_time, time_bucket=time_bucket)
 
-    simple_rnn = service.create_simple_rnn(len(target_columns), 50, (X_train.shape[1],1), ["relu", "linear"])
-    simple_rnn.fit(X_train, y_train, epochs=10, batch_size=10)
-    simple_rnn.summary()
-    y_preds_train = simple_rnn.predict(X_train)
-    y_preds_test = simple_rnn.predict(X_test)
+    master_df = data_service.create_master_candle_df(candle_dict)
+    close_prices = data_service.get_close_prices(master_df)
+    vis = Visualizer()
+    #vol_bar_df["1_Close"].groupby(pd.Grouper(freq = "5min")).count().plot()
+    vol_bar_df = data_service.get_volume_bars(master_df, m=100).dropna()
 
-    y_train_rescaled, y_test_rescaled = service.rescale(y_train), service.rescale(y_test)
-    y_train_preds_rescaled, y_test_preds_rescaled = service.rescale(y_preds_train), service.rescale(y_preds_test)
+    scaled_closes = data_service.scale_data(vol_bar_df)
+    log_returns = data_service.get_log_returns(vol_bar_df)
+    serial_autocorr = data_service.get_serial_correlation(log_returns)
 
-    
-    y_trues_total = np.concatenate((y_train_rescaled, y_test_rescaled), axis=0)
-    y_preds_total = np.concatenate((y_train_preds_rescaled, y_test_preds_rescaled), axis=0)
-    fig = service.get_plot_true_preds(y_preds_total, y_trues_total)
-    fig.savefig("plots/simple_rnn.png")
+    print(serial_autocorr)
+
+    # vis = Visualizer()
+
+    # log_returns = data_service.get_log_returns(close_prices)
+    # scaled_closes = data_service.scale_data(close_prices)
+
+
+#1_Close  3366033_Close     239_Close
