@@ -285,7 +285,40 @@ class DataService():
                 return res[lag_cutoff:] 
         raise Exception("No optimal differencing order found")
     
+    def get_cusum_filter_indxs(self, data, h = None, span=100, devs = 2.5):
+        e = pd.DataFrame(0, index=data.index,
+                     columns=['CUSUM_Event'])
+        s_pos = 0
+        s_neg = 0
+        r = data.pct_change()
+        
+        for idx in r.index:
+            if h is None or len(r[:idx]) == 1:
+                h_ = r[:idx].ewm(span=span).std().values[-1]*devs
+            else: h_ = h
+            s_pos = max(0, s_pos+r.loc[idx])
+            s_neg = min(0, s_neg+r.loc[idx])        
+            if s_neg < -h_:
+                s_neg = 0
+                e.loc[idx] = -1
+            elif s_pos > h_:
+                s_pos = 0
+                e.loc[idx] = 1
+        return e
+    
+    def get_daily_volatility(self, close, span=100):
 
+        df0 = close.index.searchsorted(close.index-pd.Timedelta(days=1))
+
+        df0 = df0[df0>0]
+
+        df0 = pd.Series(close.index[df0-1],
+                    index=close.index[close.shape[0]-df0.shape[0]:])
+
+        df0 = close.loc[df0.index]/close.loc[df0.values].values-1 # daily rets
+
+        df0 = df0.ewm(span=span).std()
+        return df0
 
     def get_X_Y(self, dataset, target_columns):
         data_array = dataset.to_numpy()
@@ -356,7 +389,9 @@ if __name__ == "__main__":
     close_prices = data_service.get_close_prices(master_df)
     p_v_bars = data_service.get_price_volume_bars(master_df, m=1000000)
     p_v_bars_scaled = data_service.scale_data(p_v_bars)
-    vol_bars = data_service.get_volume_bars(master_df, m=50000).ffill().bfill()
+    close_price_means = [close_prices[col].sum() for col in close_prices.columns]
+    vol_bar_freq = np.mean(close_price_means)/close_prices.shape[0]
+    vol_bars = data_service.get_volume_bars(master_df, m=vol_bar_freq).ffill().bfill()
     vol_bars_scaled = data_service.scale_data(vol_bars)
     p_v_bars_log = data_service.get_log_returns(p_v_bars).fillna(method="bfill")
     #p_v_bars_log = p_v_bars_log.fillna(method="bfill")
@@ -369,19 +404,11 @@ if __name__ == "__main__":
     # print(data_service.get_serial_correlation(close_log))
     # print(data_service.get_adf_stats(close_prices, orders = [0, 1, 2]))
     print(data_service.get_adf_stats(vol_bars_log))
+    diffed_volume = data_service.ts_differencing(vol_bars['1_Close'], np.divide(range(0, 100), 100), 0.01).bfill()
+    cusum = data_service.get_cusum_filter_indxs(diffed_volume, devs=2.5)
+    daily_vol = data_service.get_daily_volatility(diffed_volume)
+    daily_vol.plot()
 
-    vis = Visualizer()
-
-    opt_diff_close = data_service.ts_differencing(vol_bars['1_Close'], np.divide(range(0, 100), 100), 0.01)
-
-    fig, ax = plt.subplots(ncols=1, nrows=2)
-
-    ax[0].plot(opt_diff_close)
-    ax[0].set_title("vol")
-    ax[1].plot(close_prices["1_Close"])
-    ax[1].set_title("close price")
-
-    print(sm.tsa.stattools.adfuller(opt_diff_close))
     plt.show()
     # price_vol_df = data_service.get_token_value_bars(master_df, m=100)
     # vol_bar_df = data_service.get_volume_bars(master_df, m=100).dropna()
