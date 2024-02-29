@@ -8,7 +8,7 @@ import statsmodels.api as sm
 from scipy import stats
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from sklearn.metrics import mean_squared_error, accuracy_score
+from sklearn.metrics import mean_squared_error, accuracy_score, confusion_matrix
 from sklearn.ensemble import RandomForestClassifier
 import numpy as np
 
@@ -281,7 +281,7 @@ class DataService():
             for k in range(lag_cutoff):
                 res += weights[k]*series.shift(k).fillna(0)
             if sm.tsa.stattools.adfuller(res[lag_cutoff:])[1] <= threshold:
-                print(o)
+                print("Optimal differencing rate:", o)
                 return res[lag_cutoff:] 
         raise Exception("No optimal differencing order found")
     
@@ -290,7 +290,6 @@ class DataService():
         s_pos = 0
         s_neg = 0
         r = np.log(data).diff().dropna() 
-        #data.pct_change()
         
         for idx in r.index:
             if h is None or len(r[:idx]) == 1:
@@ -307,9 +306,9 @@ class DataService():
                 e.loc[idx] = 1
         return e
     
-    def get_daily_volatility(self, close, span=100):
+    def get_daily_volatility(self, close, span=100, days=0.5):
 
-        df0 = close.index.searchsorted(close.index-pd.Timedelta(days=1))
+        df0 = close.index.searchsorted(close.index-pd.Timedelta(days=0.5))
 
         df0 = df0[df0>0]
 
@@ -321,7 +320,7 @@ class DataService():
         df0 = df0.ewm(span=span).std()
         return df0
 
-    def get_vertical_barriers(self, close, cusum_t, mins=30):
+    def get_vertical_barriers(self, close, cusum_t, mins=60*4):
         t1 = close.index.searchsorted(cusum_t.index + pd.Timedelta(minutes=mins))
         t1=t1[t1<close.shape[0]]
         t1=(pd.Series(close.index[t1], index=cusum_t.index[:t1.shape[0]]))
@@ -359,17 +358,11 @@ class DataService():
                     sides[date:stop_t] = 0
                     starts[date:stop_t] = date
                     stops[date:stop_t] = stop_t
-            # else:
-            #     pts[date:cusum_t.index[-1]] = np.NaN
-            #     sls[date:cusum_t.index[-1]] = np.NaN
-
 
         return pd.DataFrame({"side": sides, "start": starts, "stop": stops, "pt": pts, "sl": sls}, index=cusum_t.index) 
     
     def get_triple_barrier_labels(self, close, barriers):
         labels = pd.Series(np.zeros(close.shape[0]), index=barriers.index, name="Labels")
-        starts_unique = barriers["start"].unique()
-        stops_unique = barriers["stop"].unique()
         barrs = barriers.dropna()
         barrs = barrs[barrs["side"] != 0]
         for _, val in barrs.iterrows():
@@ -377,22 +370,25 @@ class DataService():
             stop = val["stop"]
             pt = val["pt"]
             sl = val["sl"]
-            if val["side"] == 1:
-                if close[start:stop].max() >= pt:
-                    labels[start] = 1
-                elif close[start:stop].min() <= sl:
-                    labels[start] = -1
-            elif val["side"] == -1:
-                if close[start:stop].max() >= pt:
-                    labels[start] = -1
-                elif close[start:stop].min() <= sl:
-                    labels[start] = 1           
+
+            for p in close[start:stop]:
+                if val["side"] == 1:
+                    if p >= pt:
+                        labels[start] = 1
+                    elif p <= sl:
+                        labels[start] = -1
+                elif val["side"] == -1:
+                    if p >= sl:
+                        labels[start] = -1
+                    elif p <= pt:
+                        labels[start] = 1
+                else: 
+                    labels[start] = 0
+                 
             
         return pd.concat([close, labels], axis=1)
 
-        
-
-
+    
     def get_X_Y(self, dataset, target_columns):
         data_array = dataset.to_numpy()
         X = np.delete(data_array, range(-len(target_columns), 0), 1)
@@ -455,7 +451,7 @@ if __name__ == "__main__":
         chain_slugs=[selected_chain],
         n_pairs=n_pairs)
     start_time = "2024-01-05"
-    end_time = "2024-01-08"
+    end_time = "2024-01-10"
     candle_dict = data_service.get_ohlcv_candles(list(pairs_data.index.values), start_time, end_time, time_bucket=time_bucket)
     master_df = data_service.create_master_candle_df(candle_dict)
     master_df = pd.concat([master_df, data_service.get_price_volume(master_df)], axis=1)
@@ -464,7 +460,7 @@ if __name__ == "__main__":
     #p_v_bars_scaled = data_service.scale_data(p_v_bars)
     close_price_means = [close_prices[col].sum() for col in close_prices.columns]
     vol_bar_freq = np.mean(close_price_means)/close_prices.shape[0]
-    vol_bars = data_service.get_volume_bars(master_df, m=vol_bar_freq).ffill().bfill()
+    vol_bars = data_service.get_volume_bars(master_df, m=vol_bar_freq*0.5).ffill().bfill()
     vol_bars_scaled = data_service.scale_data(vol_bars)
     #p_v_bars_log = data_service.get_log_returns(p_v_bars).fillna(method="bfill")
     vol_bars_log = data_service.get_log_returns(vol_bars).bfill()
@@ -476,16 +472,26 @@ if __name__ == "__main__":
     cusum = data_service.get_cusum_filter_indxs(diffed_volume, span=10, h=daily_volatility)
     barriers = data_service.get_triple_barriers(diffed_volume, cusum, 1.5, 1.5)
     labels = data_service.get_triple_barrier_labels(diffed_volume, barriers)
+    target_col = "Labels"
+    labels["1_Close"] = labels["1_Close"].shift(1).bfill()
+    X, y = data_service.get_X_Y(labels, ["Labels"])
 
-    labels["1_Close"].plot(label="close")
-    labels[labels["Labels"] == 1]["1_Close"].plot(marker="o", color="g", linestyle="None", label="profits")
-    labels[labels["Labels"] == -1]["1_Close"].plot(marker="x", color="r", linestyle="None", label="losses")
-    barriers["pt"].plot(label="profit taking")
-    barriers["sl"].plot(label="stop loss")
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.fit_transform(X_test)
+    print(X_train.shape[0], X_test.shape[0])
+    rf_clf = RandomForestClassifier(max_depth=10, random_state=0)
+    print(diffed_volume.shape[0])
+    rf_clf.fit(X_train, y_train)
 
-    
+    def confusion_matrix_scorer(clf, X, y):
+        y_pred = clf.predict(X)
+        cm = confusion_matrix(y, y_pred)
+        return {'tn': cm[0, 0], 'fp': cm[0, 1],
+         'fn': cm[1, 0], 'tp': cm[1, 1]}
 
-    plt.show()
-    print(labels)
+    conf_dict = confusion_matrix_scorer(rf_clf, X_test, y_test)
+    print(conf_dict)
 
 #1_Close  3366033_Close     239_Close
