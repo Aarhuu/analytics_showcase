@@ -286,11 +286,11 @@ class DataService():
         raise Exception("No optimal differencing order found")
     
     def get_cusum_filter_indxs(self, data, h = None, span=100, devs = 2.5):
-        e = pd.DataFrame(0, index=data.index,
-                     columns=['CUSUM_Event'])
+        e = pd.Series(0, index=data.index)
         s_pos = 0
         s_neg = 0
-        r = data.pct_change()
+        r = np.log(data).diff().dropna() 
+        #data.pct_change()
         
         for idx in r.index:
             if h is None or len(r[:idx]) == 1:
@@ -302,6 +302,7 @@ class DataService():
                 s_neg = 0
                 e.loc[idx] = -1
             elif s_pos > h_:
+
                 s_pos = 0
                 e.loc[idx] = 1
         return e
@@ -319,6 +320,78 @@ class DataService():
 
         df0 = df0.ewm(span=span).std()
         return df0
+
+    def get_vertical_barriers(self, close, cusum_t, mins=30):
+        t1 = close.index.searchsorted(cusum_t.index + pd.Timedelta(minutes=mins))
+        t1=t1[t1<close.shape[0]]
+        t1=(pd.Series(close.index[t1], index=cusum_t.index[:t1.shape[0]]))
+        return t1
+    
+    def get_triple_barriers(self, close, cusum_t, pt, sl):
+        pts = pd.Series(np.NaN, index=cusum_t.index)
+        sls = pd.Series(np.NaN, index=cusum_t.index)
+        sides = pd.Series(np.NaN, index=cusum_t.index)
+        starts = pd.Series(np.NaN, index=cusum_t.index)
+        stops = pd.Series(np.NaN, index=cusum_t.index)
+
+        daily_vola = (close/close.shift(1) - 1).ewm(span=100).std().bfill()
+        vert_barriers = self.get_vertical_barriers(close, cusum_t)
+        for date in cusum_t.index:
+            if date <= vert_barriers.index[-1]:
+                if cusum_t.loc[date] > 0:
+                    stop_t = vert_barriers.loc[date]
+                    starts[date:stop_t] = date
+                    stops[date:stop_t] = stop_t
+                    sides[date:stop_t] = 1
+                    pts[date:stop_t] = close.loc[date]*(1 + daily_vola[date]*pt)
+                    sls[date:stop_t] = close.loc[date]*(1 - daily_vola[date]*sl)
+
+                elif cusum_t.loc[date] < 0:
+                    stop_t = vert_barriers.loc[date]
+                    starts[date:stop_t] = date
+                    stops[date:stop_t] = stop_t
+                    sides[date:stop_t] = -1
+                    pts[date:stop_t] = close.loc[date]*(1 - daily_vola[date]*pt)
+                    sls[date:stop_t] = close.loc[date]*(1 + daily_vola[date]*sl)
+
+                else: 
+                    stop_t = vert_barriers.loc[date]
+                    sides[date:stop_t] = 0
+                    starts[date:stop_t] = date
+                    stops[date:stop_t] = stop_t
+            # else:
+            #     pts[date:cusum_t.index[-1]] = np.NaN
+            #     sls[date:cusum_t.index[-1]] = np.NaN
+
+
+        return pd.DataFrame({"side": sides, "start": starts, "stop": stops, "pt": pts, "sl": sls}, index=cusum_t.index) 
+    
+    def get_triple_barrier_labels(self, close, barriers):
+        labels = pd.Series(np.zeros(close.shape[0]), index=barriers.index, name="Labels")
+        starts_unique = barriers["start"].unique()
+        stops_unique = barriers["stop"].unique()
+        barrs = barriers.dropna()
+        barrs = barrs[barrs["side"] != 0]
+        for _, val in barrs.iterrows():
+            start = val["start"]
+            stop = val["stop"]
+            pt = val["pt"]
+            sl = val["sl"]
+            if val["side"] == 1:
+                if close[start:stop].max() >= pt:
+                    labels[start] = 1
+                elif close[start:stop].min() <= sl:
+                    labels[start] = -1
+            elif val["side"] == -1:
+                if close[start:stop].max() >= pt:
+                    labels[start] = -1
+                elif close[start:stop].min() <= sl:
+                    labels[start] = 1           
+            
+        return pd.concat([close, labels], axis=1)
+
+        
+
 
     def get_X_Y(self, dataset, target_columns):
         data_array = dataset.to_numpy()
@@ -381,47 +454,38 @@ if __name__ == "__main__":
         exc_slugs=exchange_data.iloc[0:n_exchange]["name"],
         chain_slugs=[selected_chain],
         n_pairs=n_pairs)
-    start_time = "2024-01-01"
-    end_time = "2024-01-15"
+    start_time = "2024-01-05"
+    end_time = "2024-01-08"
     candle_dict = data_service.get_ohlcv_candles(list(pairs_data.index.values), start_time, end_time, time_bucket=time_bucket)
     master_df = data_service.create_master_candle_df(candle_dict)
     master_df = pd.concat([master_df, data_service.get_price_volume(master_df)], axis=1)
     close_prices = data_service.get_close_prices(master_df)
-    p_v_bars = data_service.get_price_volume_bars(master_df, m=1000000)
-    p_v_bars_scaled = data_service.scale_data(p_v_bars)
+    #p_v_bars = data_service.get_price_volume_bars(master_df, m=1000000)
+    #p_v_bars_scaled = data_service.scale_data(p_v_bars)
     close_price_means = [close_prices[col].sum() for col in close_prices.columns]
     vol_bar_freq = np.mean(close_price_means)/close_prices.shape[0]
     vol_bars = data_service.get_volume_bars(master_df, m=vol_bar_freq).ffill().bfill()
     vol_bars_scaled = data_service.scale_data(vol_bars)
-    p_v_bars_log = data_service.get_log_returns(p_v_bars).fillna(method="bfill")
-    #p_v_bars_log = p_v_bars_log.fillna(method="bfill")
-    vol_bars_log = data_service.get_log_returns(vol_bars).fillna(method="bfill")
-    #vol_bars_log = vol_bars_log.fillna(method="bfill")
-    close_log = data_service.get_log_returns(close_prices).fillna(method="bfill")
-    #close_log = close_log.fillna(method="bfill")
-    # print(data_service.get_serial_correlation(p_v_bars_log))
-    # print(data_service.get_serial_correlation(vol_bars_log))
-    # print(data_service.get_serial_correlation(close_log))
-    # print(data_service.get_adf_stats(close_prices, orders = [0, 1, 2]))
+    #p_v_bars_log = data_service.get_log_returns(p_v_bars).fillna(method="bfill")
+    vol_bars_log = data_service.get_log_returns(vol_bars).bfill()
+    #close_log = data_service.get_log_returns(close_prices).fillna(method="bfill")
     print(data_service.get_adf_stats(vol_bars_log))
     diffed_volume = data_service.ts_differencing(vol_bars['1_Close'], np.divide(range(0, 100), 100), 0.01).bfill()
-    cusum = data_service.get_cusum_filter_indxs(diffed_volume, devs=2.5)
-    daily_vol = data_service.get_daily_volatility(diffed_volume)
-    daily_vol.plot()
+    daily_volatility = data_service.get_daily_volatility(diffed_volume, span=30).mean()
+    d_volas = data_service.get_daily_volatility(diffed_volume, span=30)
+    cusum = data_service.get_cusum_filter_indxs(diffed_volume, span=10, h=daily_volatility)
+    barriers = data_service.get_triple_barriers(diffed_volume, cusum, 1.5, 1.5)
+    labels = data_service.get_triple_barrier_labels(diffed_volume, barriers)
+
+    labels["1_Close"].plot(label="close")
+    labels[labels["Labels"] == 1]["1_Close"].plot(marker="o", color="g", linestyle="None", label="profits")
+    labels[labels["Labels"] == -1]["1_Close"].plot(marker="x", color="r", linestyle="None", label="losses")
+    barriers["pt"].plot(label="profit taking")
+    barriers["sl"].plot(label="stop loss")
+
+    
 
     plt.show()
-    # price_vol_df = data_service.get_token_value_bars(master_df, m=100)
-    # vol_bar_df = data_service.get_volume_bars(master_df, m=100).dropna()
-    # tick_bar_df = data_service.get_tick_bars(master_df, m=100)
-    # scaled_vols = data_service.scale_data(vol_bar_df)
-    # scaled_ticks = data_service.scale_data(tick_bar_df)
-    #log_returns = data_service.get_log_returns(vol_bar_df)
-    #serial_autocorr = data_service.get_serial_correlation(log_returns)
-
-    # vis = Visualizer()
-
-    # log_returns = data_service.get_log_returns(close_prices)
-    # scaled_closes = data_service.scale_data(close_prices)
-
+    print(labels)
 
 #1_Close  3366033_Close     239_Close
