@@ -1,4 +1,3 @@
-import datetime
 from datetime import date
 
 import pandas as pd
@@ -25,6 +24,7 @@ class Portfolio():
         self.results: scipy.OptimizeResult = None
         self.optim_returns: float = None
         self.optim_vola: float = None
+        self.stock_paths: pd.DataFrame = pd.DataFrame()
 
     def download_close_data(self) -> None:
         self.close_data = yf.download(self.tickers, self.start_date, self.end_date).Close
@@ -32,7 +32,7 @@ class Portfolio():
 
     def get_daily_returns(self):
         for _, x in enumerate(self.close_data.columns.values):
-            self.daily_returns[x] = self.close_data[x].pct_change().replace("", None).ffill()
+            self.daily_returns[x] = self.close_data[x].pct_change().ffill()
 
     def get_avg_daily_returns(self):
         if self.close_data.shape[0] < 1:
@@ -79,6 +79,21 @@ class Portfolio():
         self.optim_sharpe = np.dot(min_w, self.avg_daily_returns)/np.sqrt(np.dot(min_w, np.dot(min_w, self.covariance))*252)*100
         self.optim_returns = np.dot(min_w, self.avg_daily_returns)*100
         self.optim_vola = np.sqrt(np.dot(min_w, np.dot(self.covariance,min_w))*252)
+
+def mc_simulator(portfolio: Portfolio, days: int):
+    number_sims = 200
+    portfolio_paths = pd.DataFrame(index=range(1,days+1))
+    for n in range(1, number_sims+1):
+        mu, sigma = portfolio.optim_returns/100, portfolio.optim_vola 
+        returns = [1]
+        for i in range(1,days):
+            draw = np.random.normal(mu, sigma, 1)[0]
+            returns.append(returns[i-1]*(1 + draw))
+        portfolio_paths[f"Sim_{n}"] = returns
+
+    return portfolio_paths
+
+
 
     
     

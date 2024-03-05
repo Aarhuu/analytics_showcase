@@ -1,7 +1,6 @@
 
 from datetime import date
-
-import dash
+import pandas as pd
 from dash import html, dcc, callback, Dash
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
@@ -16,16 +15,21 @@ try:
 except Exception as e:
     print(e)
 
+optim_portfolio = None
+
 app = Dash(__name__, use_pages=False, external_stylesheets=[dbc.themes.LUX])
 
 server = app.server
 app.layout = html.Div([
-    html.H1("Portfolio sharpe ratio optimizer for S&P500 stocks"),
+    html.H1("Portfolio analyzer for S&P500 stocks"),
+    html.P("1. Select two or more stocks, time span, and visualize returns and volatilites."),
+    html.P("2. Press Optimize portfolio weights to get weights for maximum Sharpe ratio"),
+    html.P("3. Select number of days and percentage, and press Simulate Value at Risk to get VAR values for the optimized portfolio"),
     dbc.Label("Select at least two stocks from the dropdown menu", html_for="dropdown"),
     html.Div([
         dcc.Dropdown(id="ticker_dropdown", options=tickers.Security.values, value="", multi=True)
     ],
-    style={"width": "30%"}),
+    style={"width": "30%", "text-align":"center"}),
     dbc.Label("Select a time frame for calculating average daily returns and volatility (risk)", html_for="datepicker"),
     html.Br(),
     dcc.DatePickerRange(
@@ -37,22 +41,55 @@ app.layout = html.Div([
         initial_visible_month=date.today(),
     ),
     html.Br(),
-    html.Div([
-    dbc.Button("Plot prices, average daily returns and volatility", id="plot_data", n_clicks=0),
-    ],
-    className="me-1 mt-1 btn btn-primary", style={"width": "40vh"}),
+    dbc.Row([
+        dbc.Col(dbc.Button("Plot stock data", id="plot_data", n_clicks=0, size="lg", className="me-1")),
+        dbc.Col(dcc.Loading(
+                id = "loading-price",
+                type = "default",
+                children=[html.Div(id="stock_prices", style={"display": "inline-block", "width": "50%"}),
+                        html.Div(id="returns_volas", style={"display": "inline-block", "width": "50%"})]
+                ),md=9
+            )
+        ] 
+        ),
+
     html.Br(),
-    html.Div([
-    dbc.Button("Optimize portfolio weights", id="optimize_portfolio", n_clicks=0),
-    ],
-    className="me-1 mt-1 btn btn-primary", style={"width": "40vh"}),
-    html.Div([
-        html.Div(id="stock_prices", style={"display": "inline-block", "width": "50%"}),
-        html.Div(id="returns_volas", style={"display": "inline-block", "width": "50%"})
-    ]),
-    html.Div([
-        html.Div(id="optimizer", style={"display": "inline-block", "width": "80%"})
-    ])
+    dbc.Row([
+        dbc.Col(dbc.Button("Optimize portfolio weights", id="optimize_portfolio", size="lg", className="me-1")),
+        dbc.Col(dcc.Loading(
+                id = "loading-portfolio",
+                type = "default",
+                children=[html.Div(id="optimizer", style={"display": "inline-block", "width": "80%", "text-align":"center"})]
+                ),md=9
+            )
+        ] 
+        ),
+
+    html.Br(),
+    html.P("Select number of days to simulate Value at risk"),
+    html.Div([dcc.Dropdown(id="days_risk", options=[10, 50, 100], value="", multi=False)],style={"width": "30%", "text-align":"center"}),
+    html.Br(),
+    html.P("Select percentage for Value at Risk"),
+    html.Div([dcc.Dropdown(id="percentage_risk", options=[5, 10, 15], value="", multi=False)],style={"width": "30%", "text-align":"center"}),
+    html.Br(),
+    dbc.Row([
+        dbc.Col(dbc.Button("Simulate value at risk", id="simulate_risk", size="lg", className="me-1")),
+        dbc.Col(dcc.Loading(
+                id = "loading-risk",
+                type = "default",
+                children=[html.Div(id="simulator", style={"display": "inline-block", "width": "80%", "text-align": "center"})]
+                ), md=9
+            )
+        ]
+        ),
+    html.Br(),
+    html.Br(),
+    html.Br(),
+    html.Br(),
+    html.Br(),
+    html.Br(),
+    html.Br(),
+    html.Br()
 ])
 
 @callback(
@@ -78,7 +115,7 @@ def plot_data(n_clicks, selected_stocks, start_date, end_date):
         fig1.add_trace(go.Scatter(mode="markers", x=[port.volatility[sym]], y=[port.avg_daily_returns[sym]*100], name=tickers[tickers["Symbol"] == sym]["Security"].values[0], 
                                   marker=dict(size=15, line=dict(width=2))
                                   )
-                                  )
+                                  )   
     fig1.update_layout(xaxis_title="Volatility", yaxis_title="Average of daily returns")
 
     fig2 = go.Figure()
@@ -108,16 +145,36 @@ def optimise_portfolio(n_clicks, selected_stocks, start_date, end_date):
     port.get_volatility()
     port.optimize()
     port.get_optimization_results()
+    global optim_portfolio
+    optim_portfolio = port
     names = []
     for sym in port.series.index:
         names.append(tickers[tickers["Symbol"] == sym]["Security"].values[0])
     if port.results.success:
         fig = go.Figure([go.Bar(x=names, y=port.series.values)])
         fig.update_layout(xaxis_title="Stock symbol", yaxis_title="Weight")
-        return [f"Optimal allocation found with Sharpe ratio of {np.round(port.optim_sharpe, decimals=3)}. Extrapolated annual return for the portfolio is {np.round(port.optim_returns, decimals=3)}% with volatility of {np.round(port.optim_vola, decimals=3)}", dcc.Graph(figure=fig)]
+        return [f"Optimal allocation found with Sharpe ratio of {np.round(port.optim_sharpe, decimals=3)}. Expected return for the portfolio is {np.round(port.optim_returns, decimals=3)}% with volatility of {np.round(port.optim_vola, decimals=3)}", dcc.Graph(figure=fig)]
     else:
         return "Optimal allocation not found. Select other stocks and/or timeframe"
 
+@callback(
+    Output("simulator", "children"),
+    Input("simulate_risk", "n_clicks"),
+    [State("days_risk", "value"),
+     State("percentage_risk", "value")]
+)
+
+def simulate_risk(n_clicks, days, percentage):
+    if optim_portfolio == None or days == "" or percentage == "":
+        raise PreventUpdate
+    optim = mc_simulator(optim_portfolio, days)
+    var = np.abs(np.percentile(optim.iloc[-1,:].values, percentage) - 1)
+    fig = go.Figure()
+    for path in optim.columns:
+        fig.add_trace(go.Line(x=optim[path].index, y=optim[path], line=dict(color="rgba(0, 0, 255, 0.2)")))
+    fig.update_layout(showlegend=False)
+    fig.update_layout(xaxis_title="Day", yaxis_title="Portfolio value")
+    return [f"{optim.shape[0]}-day VAR for {percentage}% is {np.round(var*100, 2)} of portfolio value", dcc.Graph(figure=fig)]
 
 if __name__ == '__main__':
-    app.run(debug=False)
+    app.run(debug=True)
