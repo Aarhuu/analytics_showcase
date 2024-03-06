@@ -1,4 +1,5 @@
 
+import datetime
 from datetime import date
 import pandas as pd
 from dash import html, dcc, callback, Dash
@@ -30,7 +31,7 @@ app.layout = html.Div([
         dcc.Dropdown(id="ticker_dropdown", options=tickers.Security.values, value="", multi=True)
     ],
     style={"width": "30%", "text-align":"center"}),
-    dbc.Label("Select a time frame for calculating average daily returns and volatility (risk)", html_for="datepicker"),
+    dbc.Label("Select a time frame of at least 15 days for calculating average daily returns and volatility (risk)", html_for="datepicker"),
     html.Br(),
     dcc.DatePickerRange(
         id="datepicker",
@@ -102,7 +103,7 @@ app.layout = html.Div([
 )
 
 def plot_data(n_clicks, selected_stocks, start_date, end_date):
-    if not start_date or not end_date or len(selected_stocks) < 2:
+    if not start_date or not end_date or len(selected_stocks) < 2 or (datetime.datetime.strptime(end_date, "%Y-%m-%d") - datetime.datetime.strptime(start_date, "%Y-%m-%d")).days < 15:
         raise PreventUpdate
     symbols = tickers[tickers["Security"].isin(selected_stocks)]["Symbol"]
     port = Portfolio(list(symbols), start_date, end_date)
@@ -135,7 +136,7 @@ def plot_data(n_clicks, selected_stocks, start_date, end_date):
 )
 
 def optimise_portfolio(n_clicks, selected_stocks, start_date, end_date):
-    if not start_date or not end_date or len(selected_stocks) < 2:
+    if not start_date or not end_date or len(selected_stocks) < 2 or (datetime.datetime.strptime(end_date, "%Y-%m-%d") - datetime.datetime.strptime(start_date, "%Y-%m-%d")).days < 15:
         raise PreventUpdate
     symbols = tickers[tickers["Security"].isin(selected_stocks)]["Symbol"]
     port = Portfolio(list(symbols), start_date, end_date)

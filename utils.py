@@ -88,6 +88,8 @@ def mc_simulator(portfolio: Portfolio, days: int):
         returns = [1]
         for i in range(1,days):
             draw = np.random.normal(mu, sigma, 1)[0]
+            while draw < -1:
+                draw = np.random.normal(mu, sigma, 1)[0]
             returns.append(returns[i-1]*(1 + draw))
         portfolio_paths[f"Sim_{n}"] = returns
 
