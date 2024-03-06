@@ -175,7 +175,7 @@ def simulate_risk(n_clicks, days, percentage):
         fig.add_trace(go.Line(x=optim[path].index, y=optim[path], line=dict(color="rgba(0, 0, 255, 0.2)")))
     fig.update_layout(showlegend=False)
     fig.update_layout(xaxis_title="Day", yaxis_title="Portfolio value")
-    return [f"{optim.shape[0]}-day VAR for {percentage}% is {np.round(var*100, 2)} of portfolio value", dcc.Graph(figure=fig)]
+    return [f"{optim.shape[0]}-day VAR for {percentage}% is {np.round(var*100, 2)}% of portfolio value", dcc.Graph(figure=fig)]
 
 if __name__ == '__main__':
     app.run(debug=True)
