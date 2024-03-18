@@ -1,6 +1,6 @@
 ## Portfolio optimizer
 
-Tool for S&P500 stock portfolio analysis. Based on mean-variance portfolio presented by Markovitz. 
+Tool for S&P500 stock portfolio analysis. Based on mean-variance portfolio presented by Markovitz. Online hosted version available via [link](https://analytics-showcase.onrender.com/) 
 
 Usage:
 
