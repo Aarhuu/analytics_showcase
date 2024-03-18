@@ -13,9 +13,18 @@ Tool based on python Dash web application. For local installation:
 
 ```
 git clone https://github.com/Aarhuu/portfolio_optimizer.git
+```
 
+Use of virtual environment is recommended, i.e.,
+
+```
+python -m venv .venv
+```
+
+After virtual environment is created and activated, install requirements and run the app:
+
+```
 pip install -r requirements.txt
 
 python app.py
-
 ```
